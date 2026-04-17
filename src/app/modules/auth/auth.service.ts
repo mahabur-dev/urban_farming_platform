@@ -1,135 +1,153 @@
-/* eslint-disable no-unused-vars */
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { JwtPayload, Secret } from 'jsonwebtoken';
+import { Secret } from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import config from '../../config';
 import AppError from '../../error/appError';
-import { IUser } from '../user/user.interface';
-import User from '../user/user.model';
+import prisma from '../../db/prisma';
 import { jwtHelpers } from '../../helper/jwtHelpers';
 import sendMailer from '../../helper/sendMailer';
-import bcrypt from 'bcryptjs';
 import createOtpTemplate from '../../utils/createOtpTemplate';
+import { userSelect } from '../user/user.constant';
 
-const registerUser = async (payload: Partial<IUser>) => {
-  const exist = await User.findOne({ email: payload.email });
-  if (exist) throw new AppError(400, 'User already exists');
+const registerUser = async (payload: {
+  name: string;
+  email: string;
+  password: string;
+}) => {
+  const existing = await prisma.user.findUnique({ where: { email: payload.email } });
+  if (existing) throw new AppError(400, 'User already exists with this email');
+
+  const hashedPassword = await bcrypt.hash(
+    payload.password,
+    Number(config.bcryptSaltRounds),
+  );
 
   const idx = Math.floor(Math.random() * 100);
-  payload.profileImage = `https://avatar.iran.liara.run/public/${idx}.png`;
+  const user = await prisma.user.create({
+    data: {
+      ...payload,
+      password: hashedPassword,
+      profileImage: `https://avatar.iran.liara.run/public/${idx}.png`,
+    },
+    select: userSelect,
+  });
 
-  const user = await User.create(payload);
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { otp, otpExpiry: new Date(Date.now() + 20 * 60 * 1000) },
+  });
+
+  await sendMailer(
+    payload.email,
+    'Verify your email',
+    createOtpTemplate(otp, payload.email, 'Urban Farming Platform'),
+  );
 
   return user;
 };
 
-const loginUser = async (payload: Partial<IUser>) => {
-  const user = await User.findOne({ email: payload.email });
-  if (!user) throw new AppError(401, 'User not found');
-  if (!payload.password) throw new AppError(400, 'Password is required');
+const loginUser = async (payload: { email: string; password: string }) => {
+  const user = await prisma.user.findUnique({ where: { email: payload.email } });
+  if (!user) throw new AppError(401, 'Invalid email or password');
 
-  const isPasswordMatched = await bcrypt.compare(
-    payload.password,
-    user.password,
-  );
-  if (!isPasswordMatched) throw new AppError(401, 'Password not matched');
+  const isMatch = await bcrypt.compare(payload.password, user.password);
+  if (!isMatch) throw new AppError(401, 'Invalid email or password');
+
   if (!user.verified) throw new AppError(403, 'Please verify your email first');
+  if (user.status === 'blocked') throw new AppError(403, 'Your account has been blocked');
+
+  const tokenPayload = { id: user.id, role: user.role, email: user.email };
 
   const accessToken = jwtHelpers.genaretToken(
-    { id: user._id, role: user.role, email: user.email },
+    tokenPayload,
     config.jwt.accessTokenSecret as Secret,
     config.jwt.accessTokenExpires,
   );
-
   const refreshToken = jwtHelpers.genaretToken(
-    { id: user._id, role: user.role, email: user.email },
+    tokenPayload,
     config.jwt.refreshTokenSecret as Secret,
     config.jwt.refreshTokenExpires,
   );
 
-  const { password, ...userWithoutPassword } = user.toObject();
-  return { accessToken, refreshToken, user: userWithoutPassword };
+  const { password, otp, otpExpiry, ...safeUser } = user;
+  return { accessToken, refreshToken, user: safeUser };
 };
 
 const refreshToken = async (token: string) => {
-  const varifiedToken = jwtHelpers.verifyToken(
+  const decoded = jwtHelpers.verifyToken(
     token,
     config.jwt.refreshTokenSecret as Secret,
-  ) as JwtPayload;
-
-  const user = await User.findById(varifiedToken.id);
+  );
+  const user = await prisma.user.findUnique({ where: { id: decoded.id } });
   if (!user) throw new AppError(401, 'User not found');
 
   const accessToken = jwtHelpers.genaretToken(
-    { id: user._id, role: user.role, email: user.email },
+    { id: user.id, role: user.role, email: user.email },
     config.jwt.accessTokenSecret as Secret,
     config.jwt.accessTokenExpires,
   );
 
-  const { password, ...userWithoutPassword } = user.toObject();
-  return { accessToken, user: userWithoutPassword };
+  const { password, otp, otpExpiry, ...safeUser } = user;
+  return { accessToken, user: safeUser };
 };
 
 const forgotPassword = async (email: string) => {
-  const user = await User.findOne({ email });
-  if (!user) throw new AppError(401, 'User not found');
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) throw new AppError(404, 'No user found with this email');
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  user.otp = otp;
-  user.otpExpiry = new Date(Date.now() + 20 * 60 * 1000); // 20 mins
-  await user.save();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { otp, otpExpiry: new Date(Date.now() + 20 * 60 * 1000) },
+  });
 
   await sendMailer(
-    user.email,
-    user.firstName + ' ' + user.lastName,
-    createOtpTemplate(otp, user.email, 'Aromaitaly Website'),
+    email,
+    'Password Reset OTP',
+    createOtpTemplate(otp, email, 'Urban Farming Platform'),
   );
-
-  return { message: 'OTP sent to your email' };
 };
 
 const verifyEmail = async (email: string, otp: string) => {
-  const user = await User.findOne({ email });
-  if (!user) throw new AppError(401, 'User not found');
-
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) throw new AppError(404, 'User not found');
   if (user.otp !== otp || !user.otpExpiry || user.otpExpiry < new Date()) {
     throw new AppError(400, 'Invalid or expired OTP');
   }
 
-  user.verified = true;
-  (user as any).otp = undefined;
-  (user as any).otpExpiry = undefined;
-  await user.save();
-
-  return { message: 'Email verified successfully' };
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { verified: true, otp: null, otpExpiry: null },
+  });
 };
 
 const resetPassword = async (email: string, newPassword: string) => {
-  const user = await User.findOne({ email });
+  const user = await prisma.user.findUnique({ where: { email } });
   if (!user) throw new AppError(404, 'User not found');
 
-  user.password = newPassword;
-  (user as any).otp = undefined;
-  (user as any).otpExpiry = undefined;
-  await user.save();
+  const hashedPassword = await bcrypt.hash(
+    newPassword,
+    Number(config.bcryptSaltRounds),
+  );
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { password: hashedPassword, otp: null, otpExpiry: null },
+  });
 
-  // Auto-login after reset
+  const tokenPayload = { id: updated.id, role: updated.role, email: updated.email };
   const accessToken = jwtHelpers.genaretToken(
-    { id: user._id, role: user.role, email: user.email },
+    tokenPayload,
     config.jwt.accessTokenSecret as Secret,
     config.jwt.accessTokenExpires,
   );
   const refreshToken = jwtHelpers.genaretToken(
-    { id: user._id, role: user.role, email: user.email },
+    tokenPayload,
     config.jwt.refreshTokenSecret as Secret,
     config.jwt.refreshTokenExpires,
   );
 
-  const { password, ...userWithoutPassword } = user.toObject();
-  return {
-    accessToken,
-    refreshToken,
-    user: userWithoutPassword,
-  };
+  const { password, otp, otpExpiry, ...safeUser } = updated;
+  return { accessToken, refreshToken, user: safeUser };
 };
 
 const changePassword = async (
@@ -137,15 +155,17 @@ const changePassword = async (
   oldPassword: string,
   newPassword: string,
 ) => {
-  const user = await User.findById(userId);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new AppError(404, 'User not found');
-  const isPasswordMatched = await bcrypt.compare(oldPassword, user.password);
-  if (!isPasswordMatched) throw new AppError(400, 'Password not matched');
 
-  user.password = newPassword;
-  await user.save();
+  const isMatch = await bcrypt.compare(oldPassword, user.password);
+  if (!isMatch) throw new AppError(400, 'Old password is incorrect');
 
-  return { message: 'Password changed successfully' };
+  const hashedPassword = await bcrypt.hash(
+    newPassword,
+    Number(config.bcryptSaltRounds),
+  );
+  await prisma.user.update({ where: { id: userId }, data: { password: hashedPassword } });
 };
 
 export const authService = {

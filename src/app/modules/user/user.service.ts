@@ -1,140 +1,113 @@
+import { Prisma } from '@prisma/client';
 import AppError from '../../error/appError';
 import { fileUploader } from '../../helper/fileUploder';
 import pagination, { IOption } from '../../helper/pagenation';
+import prisma from '../../db/prisma';
+import { ICreateUser, IUpdateUser, IUserFilter } from './user.interface';
+import { userSearchableFields, userSelect } from './user.constant';
+import bcrypt from 'bcryptjs';
+import config from '../../config';
 
-import { IUser } from './user.interface';
-import User from './user.model';
-
-const createUser = async (payload: IUser) => {
-  const result = await User.create(payload);
-  if (!result) {
-    throw new AppError(400, 'Failed to create user');
-  }
+const createUser = async (payload: ICreateUser) => {
+  const hashedPassword = await bcrypt.hash(
+    payload.password,
+    Number(config.bcryptSaltRounds),
+  );
+  const result = await prisma.user.create({
+    data: { ...payload, password: hashedPassword },
+    select: userSelect,
+  });
   return result;
 };
 
-const getAllUser = async (params: any, options: IOption) => {
+const getAllUsers = async (params: IUserFilter, options: IOption) => {
   const { page, limit, skip, sortBy, sortOrder } = pagination(options);
   const { searchTerm, ...filterData } = params;
 
-  const andCondition: any[] = [];
-  const userSearchableFields = ['name', 'email', 'role'];
+  const andConditions: Prisma.UserWhereInput[] = [];
 
   if (searchTerm) {
-    andCondition.push({
-      $or: userSearchableFields.map((field) => ({
-        [field]: { $regex: searchTerm, $options: 'i' },
+    andConditions.push({
+      OR: userSearchableFields.map((field) => ({
+        [field]: { contains: searchTerm, mode: 'insensitive' },
       })),
     });
   }
 
   if (Object.keys(filterData).length) {
-    andCondition.push({
-      $and: Object.entries(filterData).map(([field, value]) => ({
-        [field]: value,
-      })),
+    andConditions.push({
+      AND: Object.entries(filterData).map(([key, value]) => ({ [key]: value })),
     });
   }
 
-  const whereCondition = andCondition.length > 0 ? { $and: andCondition } : {};
+  const whereCondition: Prisma.UserWhereInput =
+    andConditions.length ? { AND: andConditions } : {};
 
-  const result = await User.find(whereCondition)
-    .skip(skip)
-    .limit(limit)
-    .sort({ [sortBy]: sortOrder } as any);
+  const [data, total] = await Promise.all([
+    prisma.user.findMany({
+      where: whereCondition,
+      skip,
+      take: limit,
+      orderBy: { [sortBy]: sortOrder },
+      select: userSelect,
+    }),
+    prisma.user.count({ where: whereCondition }),
+  ]);
 
-  if (!result) {
-    throw new AppError(404, 'Users not found');
-  }
-
-  const total = await User.countDocuments(whereCondition);
-
-  return {
-    data: result,
-    meta: {
-      total,
-      page,
-      limit,
-    },
-  };
+  return { data, meta: { total, page, limit } };
 };
 
 const getUserById = async (id: string) => {
-  const result = await User.findById(id);
-  if (!result) {
-    throw new AppError(404, 'User not found');
-  }
-  return result;
+  const user = await prisma.user.findUnique({ where: { id }, select: userSelect });
+  if (!user) throw new AppError(404, 'User not found');
+  return user;
 };
 
 const updateUserById = async (
   id: string,
-  payload: IUser,
+  payload: IUpdateUser,
   file?: Express.Multer.File,
 ) => {
-  const user = await User.findById(id);
-  if (!user) {
-    throw new AppError(404, 'User not found');
-  }
+  await getUserById(id);
   if (file) {
-    const uploadProfile = await fileUploader.uploadToCloudinary(file);
-    if (!uploadProfile?.url) {
-      throw new AppError(400, 'Failed to upload profile image');
-    }
-    payload.profileImage = uploadProfile.url;
+    const uploaded = await fileUploader.uploadToCloudinary(file);
+    if (!uploaded?.url) throw new AppError(400, 'Failed to upload profile image');
+    payload.profileImage = uploaded.url;
   }
-  const result = await User.findByIdAndUpdate(id, payload, { new: true });
-  if (!result) {
-    throw new AppError(404, 'User not found');
-  }
-  return result;
+  return prisma.user.update({ where: { id }, data: payload, select: userSelect });
 };
 
 const deleteUserById = async (id: string) => {
-  const result = await User.findByIdAndDelete(id);
-  if (!result) {
-    throw new AppError(404, 'User not found');
-  }
-  return result;
+  await getUserById(id);
+  return prisma.user.delete({ where: { id }, select: userSelect });
 };
 
-const profile = async (id: string) => {
-  const result = await User.findById(id);
-  if (!result) {
-    throw new AppError(404, 'User not found');
-  }
-  return result;
+const getMyProfile = async (id: string) => {
+  const user = await prisma.user.findUnique({ where: { id }, select: userSelect });
+  if (!user) throw new AppError(404, 'User not found');
+  return user;
 };
 
-const updatedMyProfile = async (
+const updateMyProfile = async (
   id: string,
-  payload: IUser,
+  payload: IUpdateUser,
   file?: Express.Multer.File,
 ) => {
-  const user = await User.findById(id);
-  if (!user) {
-    throw new AppError(404, 'User not found');
-  }
+  await getMyProfile(id);
   if (file) {
-    const uploadProfile = await fileUploader.uploadToCloudinary(file);
-    if (!uploadProfile?.url) {
-      throw new AppError(400, 'Failed to upload profile image');
-    }
-    payload.profileImage = uploadProfile.url;
+    const uploaded = await fileUploader.uploadToCloudinary(file);
+    if (!uploaded?.url) throw new AppError(400, 'Failed to upload profile image');
+    payload.profileImage = uploaded.url;
   }
-  const result = await User.findByIdAndUpdate(user._id, payload, { new: true });
-  if (!result) {
-    throw new AppError(404, 'User not found');
-  }
-  return result;
+  return prisma.user.update({ where: { id }, data: payload, select: userSelect });
 };
 
 export const userService = {
   createUser,
-  getAllUser,
+  getAllUsers,
   getUserById,
   updateUserById,
   deleteUserById,
-  profile,
-  updatedMyProfile,
+  getMyProfile,
+  updateMyProfile,
 };

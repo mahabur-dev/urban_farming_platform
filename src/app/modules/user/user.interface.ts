@@ -1,18 +1,20 @@
-export interface IUser {
-  firstName: string;
-  lastName?: string;
+import { Role, UserStatus } from '@prisma/client';
+
+export interface ICreateUser {
+  name: string;
   email: string;
   password: string;
-  role: 'admin' | 'user';
+  role?: Role;
+}
+
+export interface IUpdateUser {
+  name?: string;
   profileImage?: string;
-  bio?: string;
-  phone?: string;
-  professionTitle?: string;
-  streetAddress?: string;
-  location?: string;
-  postCode?: string;
-  otp?: string;
-  otpExpiry?: Date;
-  verified?: boolean;
-  stripeAccountId?: string;
+  status?: UserStatus;
+}
+
+export interface IUserFilter {
+  searchTerm?: string;
+  role?: Role;
+  status?: UserStatus;
 }

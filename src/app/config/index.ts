@@ -6,13 +6,9 @@ dotenv.config({ path: path.join(process.cwd(), '.env') });
 export default {
   port: process.env.PORT || 3000,
   env: process.env.NODE_ENV || 'development',
-  mongoUri: process.env.MONGO_URI, // Ensure this is set in .env
-  bcryptSaltRounds: process.env.BCRYPT_SALT_ROUNDS,
-  apiKey:process.env.BEDS24_API_KEY,
-  propKey:process.env.BEDS24_PROP_KEY,
+  databaseUrl: process.env.DATABASE_URL,
+  bcryptSaltRounds: process.env.BCRYPT_SALT_ROUNDS || '12',
   jwt: {
-    jwtSecret: process.env.JWT_SECRET,
-    jwtExpire: process.env.JWT_EXPIRE,
     accessTokenSecret: process.env.ACCESS_TOKEN_SECRET,
     accessTokenExpires: process.env.ACCESS_TOKEN_EXPIRES,
     refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET,
@@ -24,23 +20,15 @@ export default {
     apiSecret: process.env.CLOUDINARY_API_SECRET,
   },
   email: {
-    expires: process.env.EMAIL_EXPIRES,
     host: process.env.EMAIL_HOST,
     port: process.env.EMAIL_PORT,
     address: process.env.EMAIL_ADDRESS,
     pass: process.env.EMAIL_PASS,
     from: process.env.EMAIL_FROM,
-    to: process.env.EMAIL_TO,
-    admin: process.env.ADMIN_EMAIL,
-  },
-  stripe: {
-    secretKey: process.env.STRIPE_SECRET_KEY,
-    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
   },
   frontendUrl: process.env.FRONTEND_URL,
   rateLimit: {
-    window: process.env.RATE_LIMIT_WINDOW,
-    max: process.env.RATE_LIMIT_MAX,
-    delay: process.env.RATE_LIMIT_DELAY,
+    windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_MAX) || 10,
   },
 };
