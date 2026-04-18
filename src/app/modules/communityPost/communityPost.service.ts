@@ -1,5 +1,5 @@
-import { Prisma } from '@prisma/client';
 import AppError from '../../error/appError';
+import { Prisma } from '@prisma/client';
 import prisma from '../../db/prisma';
 import pagination, { IOption } from '../../helper/pagenation';
 import { ICreateCommunityPost, IUpdateCommunityPost, ICommunityPostFilter } from './communityPost.interface';
